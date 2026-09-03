@@ -102,9 +102,56 @@ def clean_html_to_text(html_content: str) -> str:
 
 
 def compute_quarter(date_obj: date) -> str:
-    """Computes fiscal/calendar quarter string (e.g. Q1, Q2, Q3, Q4)."""
+    """Computes calendar quarter string (e.g. Q1, Q2, Q3, Q4)."""
     q_num = (date_obj.month - 1) // 3 + 1
     return f"Q{q_num}"
+
+
+def compute_fiscal_period_and_year(
+    report_date: date,
+    form_type: str,
+    fiscal_year_end_mmdd: Optional[str] = "1231",
+) -> tuple[str, int]:
+    """
+    Computes exact corporate fiscal quarter (Q1, Q2, Q3, Q4 / FY) and fiscal year
+    handling arbitrary corporate fiscal year ends (e.g. NVDA Jan 31, AAPL Sep 30, MSFT Jun 30).
+
+    Args:
+        report_date: Balance sheet / period end date from SEC EDGAR.
+        form_type: SEC form type ('10-K', '10-Q', '8-K').
+        fiscal_year_end_mmdd: 4-character MMDD string from SEC EDGAR (e.g. '0131' for Jan 31).
+
+    Returns:
+        Tuple of (fiscal_period, fiscal_year) e.g. ('Q1', 2025) or ('FY', 2024).
+    """
+    if not fiscal_year_end_mmdd or len(fiscal_year_end_mmdd) < 2:
+        fiscal_year_end_mmdd = "1231"
+
+    try:
+        fye_month = int(fiscal_year_end_mmdd[:2])
+    except ValueError:
+        fye_month = 12
+
+    # Calendar standard year-end (e.g. Dec 31)
+    if fye_month == 12:
+        q_num = (report_date.month - 1) // 3 + 1
+        period_str = "FY" if form_type.upper() == "10-K" else f"Q{q_num}"
+        return period_str, report_date.year
+
+    # Off-calendar fiscal year (e.g. NVDA ends Jan, AAPL ends Sep, MSFT ends Jun)
+    months_after_fye = (report_date.month - fye_month) % 12
+    quarter_num = 4 if months_after_fye == 0 else (months_after_fye - 1) // 3 + 1
+
+    # In corporate reporting, periods after fiscal year end month M belong to the NEXT fiscal year
+    if report_date.month > fye_month:
+        fiscal_year = report_date.year + 1
+    else:
+        fiscal_year = report_date.year
+
+    if form_type.upper() == "10-K":
+        return "FY", fiscal_year
+
+    return f"Q{quarter_num}", fiscal_year
 
 
 class SECLoader:
@@ -175,6 +222,9 @@ class SECLoader:
         url = f"https://data.sec.gov/submissions/CIK{cik}.json"
         data = (await self._request(url)).json()
 
+        fye_mmdd = data.get("fiscalYearEnd", "1231") or "1231"
+        formatted_fye = f"{fye_mmdd[:2]}/{fye_mmdd[2:]}" if len(fye_mmdd) >= 4 else "12/31"
+
         def _parse_filings_block(filings_meta: dict) -> List[Dict]:
             extracted = []
             forms = filings_meta.get("form", [])
@@ -194,21 +244,31 @@ class SECLoader:
                 report_date_str = filings_meta.get("reportDate", [None] * len(forms))[i] or filing_date_str
                 report_dt = datetime.strptime(report_date_str, "%Y-%m-%d").date() if report_date_str else filing_dt
 
-                report_year = report_dt.year
-                filing_quarter = compute_quarter(report_dt)
+                # Compute official corporate fiscal period and fiscal year
+                fiscal_period, fiscal_year = compute_fiscal_period_and_year(report_dt, form, fye_mmdd)
+                calendar_quarter = compute_quarter(report_dt)
 
-                if year and (report_year != year and filing_dt.year != year):
+                # Flexible year matching: matches fiscal year, report year, or filing year
+                if year and (fiscal_year != year and report_dt.year != year and filing_dt.year != year):
                     continue
 
-                if quarter and filing_quarter.upper() != quarter.upper():
-                    continue
+                # Flexible quarter matching: matches corporate fiscal quarter or calendar quarter
+                if quarter:
+                    q_clean = quarter.upper()
+                    matched_q = (
+                        q_clean == fiscal_period.upper()
+                        or q_clean == calendar_quarter.upper()
+                        or (form == "10-K" and q_clean in ("Q4", "FY"))
+                    )
+                    if not matched_q:
+                        continue
 
                 accession_raw = filings_meta["accessionNumber"][i]
                 accession = accession_raw.replace("-", "")
                 primary_doc = filings_meta["primaryDocument"][i]
                 doc_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/{primary_doc}"
                 safe_form = form.replace("/", "-")
-                filename = f"{ticker.upper()}_{safe_form}_{report_year}_{accession}.txt"
+                filename = f"{ticker.upper()}_{safe_form}_{fiscal_year}_{accession}.txt"
 
                 extracted.append({
                     "ticker": ticker.upper(),
@@ -216,8 +276,10 @@ class SECLoader:
                     "form": form,
                     "filing_date": filing_date_str,
                     "report_date": report_date_str,
-                    "year": report_year,
-                    "quarter": filing_quarter,
+                    "year": fiscal_year,
+                    "quarter": fiscal_period,
+                    "calendar_quarter": calendar_quarter,
+                    "fiscal_year_end": formatted_fye,
                     "accession": accession,
                     "primary_doc": primary_doc,
                     "url": doc_url,
