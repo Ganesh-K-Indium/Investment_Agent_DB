@@ -269,12 +269,20 @@ def sync_vector_search_index() -> str:
     from databricks.vector_search.client import VectorSearchClient
 
     try:
-        host = os.getenv("DATABRICKS_HOST")
-        client_id = os.getenv("DATABRICKS_CLIENT_ID")
-        client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
+        from databricks.sdk import WorkspaceClient
 
-        if client_id and client_secret and host:
-            vsc = VectorSearchClient(workspace_url=host, client_id=client_id, client_secret=client_secret)
+        w = WorkspaceClient()
+        token = os.getenv("DATABRICKS_TOKEN")
+        try:
+            auth_headers = w.config.authenticate()
+            if auth_headers and "Authorization" in auth_headers:
+                token = auth_headers["Authorization"].replace("Bearer ", "").strip()
+        except Exception:
+            pass
+
+        host = os.getenv("DATABRICKS_HOST")
+        if token and host:
+            vsc = VectorSearchClient(workspace_url=host, personal_access_token=token)
         else:
             vsc = VectorSearchClient()
 
