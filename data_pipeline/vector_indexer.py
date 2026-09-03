@@ -264,27 +264,44 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
     return total_processed
 
 
-def sync_vector_search_index() -> str:
-    """Synchronizes or provisions the Databricks Vector Search Delta Sync index."""
+def get_vector_search_client():
+    """
+    Initializes VectorSearchClient using the official Databricks authentication precedence:
+    1. Personal Access Token (PAT) if DATABRICKS_TOKEN provided.
+    2. Azure / AWS Service Principal credentials (DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET, DATABRICKS_HOST).
+    3. Auto-detection (Databricks notebook context).
+    """
     from databricks.vector_search.client import VectorSearchClient
 
+    host = os.getenv("DATABRICKS_HOST")
+    token = os.getenv("DATABRICKS_TOKEN")
+    client_id = os.getenv("DATABRICKS_CLIENT_ID")
+    client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
+    tenant_id = (
+        os.getenv("DATABRICKS_AZURE_TENANT_ID")
+        or os.getenv("AZURE_TENANT_ID")
+        or os.getenv("ARM_TENANT_ID")
+    )
+
+    if token and host:
+        return VectorSearchClient(workspace_url=host, personal_access_token=token)
+    elif client_id and client_secret and host:
+        kwargs = {
+            "workspace_url": host,
+            "service_principal_client_id": client_id,
+            "service_principal_client_secret": client_secret,
+        }
+        if tenant_id:
+            kwargs["azure_tenant_id"] = tenant_id
+        return VectorSearchClient(**kwargs)
+    else:
+        return VectorSearchClient()
+
+
+def sync_vector_search_index() -> str:
+    """Synchronizes or provisions the Databricks Vector Search Delta Sync index."""
     try:
-        from databricks.sdk import WorkspaceClient
-
-        w = WorkspaceClient()
-        token = os.getenv("DATABRICKS_TOKEN")
-        try:
-            auth_headers = w.config.authenticate()
-            if auth_headers and "Authorization" in auth_headers:
-                token = auth_headers["Authorization"].replace("Bearer ", "").strip()
-        except Exception:
-            pass
-
-        host = os.getenv("DATABRICKS_HOST")
-        if token and host:
-            vsc = VectorSearchClient(workspace_url=host, personal_access_token=token)
-        else:
-            vsc = VectorSearchClient()
+        vsc = get_vector_search_client()
 
         endpoints = vsc.list_endpoints().get("endpoints", [])
         ep_names = [ep.get("name") for ep in endpoints]

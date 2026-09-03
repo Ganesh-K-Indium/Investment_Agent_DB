@@ -55,9 +55,9 @@ def create_retrieval_agent(model_serving_endpoint: str = SERVING_ENDPOINT) -> Ag
         frm = args.get("form_type", "10-K")
         yr = int(args.get("year", 2024))
 
-        from databricks.vector_search.client import VectorSearchClient
+        from data_pipeline.vector_indexer import get_vector_search_client
         try:
-            vsc = VectorSearchClient()
+            vsc = get_vector_search_client()
             idx = vsc.get_index(endpoint_name=VECTOR_SEARCH_ENDPOINT, index_name=VS_INDEX_NAME)
             res = idx.similarity_search(
                 query_text=q,
