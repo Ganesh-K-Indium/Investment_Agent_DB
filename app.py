@@ -1,16 +1,22 @@
 """
 Streamlit Application: Databricks 2-Agent SEC Intelligence System.
 Features:
-1. Data Management Sidebar: Asynchronous/background SEC filing ingestion without blocking chat.
-2. HITL Plan Review Toggle: Human-in-the-loop inspection and approval of query plans before execution.
-3. Observability & Agent Reasoning: Real-time progress status and MLflow-tracked multi-agent execution.
-4. Governed Delta Feedback Widget: Real-time user ratings and critiques persisted to Unity Catalog.
+1. Granular Ingestion Plane:
+   - Filter by Form Type (10-K, 10-Q, 8-K), Fiscal Year, Quarter (Q1-Q4), or Date Range.
+   - Live SEC EDGAR Discovery & Index Status Check.
+   - Interactive Multi-Select / Ingest Specific Filings or Ingest All.
+   - Deduplication Prevention (Delta MERGE) & Error Isolation.
+2. Online 2-Agent Intelligence:
+   - HITL Plan Review Toggle: Review and modify retrieval plan before execution.
+   - Multi-Perspective Vector Retrieval with Deduplication.
+   - Governed Unity Catalog Feedback Widget persisting to agent_feedback Delta table.
 """
 
 import os
 import sys
 import json
 import subprocess
+from datetime import date, datetime
 import streamlit as st
 
 # Ensure project root in path
@@ -21,10 +27,10 @@ from config import (
     DATABRICKS_SCHEMA,
     DATABRICKS_VOLUME,
     SERVING_ENDPOINT,
-    VECTOR_SEARCH_ENDPOINT,
     VS_INDEX_NAME,
 )
-from tools.uc_tools import check_filing_status, record_feedback
+from tools.uc_tools import check_filing_status, check_multiple_accessions_status, record_feedback
+from data_pipeline.sec_loader import discover_filings_sync
 from agent.supervisor import SECSupervisorAgent
 
 st.set_page_config(
@@ -45,6 +51,12 @@ if "pending_plan" not in st.session_state:
 if "background_jobs" not in st.session_state:
     st.session_state.background_jobs = []
 
+if "discovered_filings" not in st.session_state:
+    st.session_state.discovered_filings = []
+
+if "discovered_ticker" not in st.session_state:
+    st.session_state.discovered_ticker = ""
+
 @st.cache_resource
 def get_supervisor_agent():
     return SECSupervisorAgent()
@@ -52,79 +64,140 @@ def get_supervisor_agent():
 supervisor = get_supervisor_agent()
 
 # ==============================================================================
-# 1. Sidebar: Data Plane & Background Ingestion Controls
+# 1. Sidebar: Granular Ingestion Plane & Discovery Controls
 # ==============================================================================
 with st.sidebar:
     st.title("🗄️ Ingestion Plane")
-    st.caption("Decoupled Asynchronous Filing Ingestion")
+    st.caption("Granular SEC Discovery & Asynchronous Ingestion")
 
-    with st.expander("📥 Ingest New Filing", expanded=True):
-        ingest_ticker = st.text_input("Ticker Symbol", value="NVDA", max_chars=8).upper().strip()
-        ingest_form = st.selectbox("Form Type", ["10-K", "10-Q", "8-K"], index=0)
-        ingest_year = st.number_input("Fiscal / Filing Year", min_value=2015, max_value=2026, value=2024, step=1)
+    with st.expander("🔍 Step 1: Discover Filings", expanded=True):
+        search_ticker = st.text_input("Ticker Symbol", value="NVDA", max_chars=8).upper().strip()
+        
+        selected_forms = st.multiselect(
+            "Form Types",
+            options=["10-K", "10-Q", "8-K"],
+            default=["10-K", "10-Q"],
+        )
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Check Status", use_container_width=True):
-                with st.spinner("Checking Delta table..."):
-                    status_raw = check_filing_status(ingest_ticker, ingest_form, ingest_year)
-                    status_info = json.loads(status_raw)
-                    if status_info.get("status") == "INDEXED":
-                        st.success(f"Indexed ({status_info.get('chunk_count')} chunks)")
-                    else:
-                        st.warning("Not Indexed")
+        filter_mode = st.radio("Filter Mode", ["Year & Quarter", "Date Range"], horizontal=True)
 
-        with col2:
-            if st.button("Ingest & Index", type="primary", use_container_width=True):
-                # Trigger jobs/ingest_sec_job.py asynchronously
-                job_cmd = [
-                    sys.executable,
-                    os.path.join(os.path.dirname(__file__), "jobs", "ingest_sec_job.py"),
-                    "--ticker", ingest_ticker,
-                    "--form", ingest_form,
-                    "--year", str(ingest_year),
-                ]
-                proc = subprocess.Popen(
-                    job_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-                job_desc = f"{ingest_ticker} {ingest_form} ({ingest_year})"
-                st.session_state.background_jobs.append({
-                    "target": job_desc,
-                    "pid": proc.pid,
-                    "process": proc,
-                })
-                st.info(f"Ingestion started in background for {job_desc} (PID: {proc.pid})")
+        filter_year = None
+        filter_quarter = None
+        filter_start_date = None
+        filter_end_date = None
 
-    # Background Job Monitor
+        if filter_mode == "Year & Quarter":
+            c_y, c_q = st.columns(2)
+            with c_y:
+                use_year = st.checkbox("Filter Year", value=True)
+                if use_year:
+                    filter_year = st.number_input("Year", min_value=2015, max_value=2026, value=2024, step=1)
+            with c_q:
+                q_choice = st.selectbox("Quarter", ["All Quarters", "Q1", "Q2", "Q3", "Q4"], index=0)
+                if q_choice != "All Quarters":
+                    filter_quarter = q_choice
+        else:
+            c_s, c_e = st.columns(2)
+            with c_s:
+                filter_start_date = st.date_input("Start Date", value=date(2024, 1, 1))
+            with c_e:
+                filter_end_date = st.date_input("End Date", value=date.today())
+
+        if st.button("🔎 Discover Filings on SEC EDGAR", type="primary", use_container_width=True):
+            with st.spinner(f"Querying SEC EDGAR for {search_ticker}..."):
+                try:
+                    filings = discover_filings_sync(
+                        ticker=search_ticker,
+                        form_types=selected_forms if selected_forms else None,
+                        year=filter_year,
+                        quarter=filter_quarter,
+                        start_date=str(filter_start_date) if filter_start_date else None,
+                        end_date=str(filter_end_date) if filter_end_date else None,
+                    )
+                    # Check existing Delta index status for all discovered accessions
+                    acc_list = [f["accession"] for f in filings]
+                    status_map = check_multiple_accessions_status(search_ticker, acc_list)
+                    for f in filings:
+                        f["chunks"] = status_map.get(f["accession"], 0)
+                        f["indexed"] = f["chunks"] > 0
+
+                    st.session_state.discovered_filings = filings
+                    st.session_state.discovered_ticker = search_ticker
+                    st.success(f"Found {len(filings)} filing(s) for {search_ticker}!")
+                except Exception as e:
+                    st.error(f"Discovery error: {e}")
+
+    # Step 2: Selective / Batch Ingestion
+    if st.session_state.discovered_filings:
+        with st.expander(f"📥 Step 2: Select & Ingest ({st.session_state.discovered_ticker})", expanded=True):
+            discovered = st.session_state.discovered_filings
+            st.caption(f"Select filings to ingest into `{DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}`:")
+
+            selected_accessions = []
+            select_all = st.checkbox("Select All Discovered", value=False)
+
+            for idx, item in enumerate(discovered):
+                status_icon = "✅ Indexed" if item.get("indexed") else "⚪ Ready"
+                label = f"{item['form']} ({item.get('quarter', 'N/A')} {item['year']}) | {item['filing_date']} | {status_icon}"
+                is_checked = select_all
+                c_box = st.checkbox(label, value=is_checked, key=f"f_chk_{item['accession']}_{idx}")
+                if c_box:
+                    selected_accessions.append(item["accession"])
+
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("📥 Ingest Selected", use_container_width=True, disabled=(len(selected_accessions) == 0)):
+                    job_cmd = [
+                        sys.executable,
+                        os.path.join(os.path.dirname(__file__), "jobs", "ingest_sec_job.py"),
+                        "--ticker", st.session_state.discovered_ticker,
+                        "--accessions", *selected_accessions,
+                    ]
+                    proc = subprocess.Popen(job_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    desc = f"{st.session_state.discovered_ticker} ({len(selected_accessions)} selected filings)"
+                    st.session_state.background_jobs.append({"target": desc, "pid": proc.pid, "process": proc})
+                    st.info(f"Started ingestion for {desc} (PID: {proc.pid})")
+
+            with col_btn2:
+                if st.button("⚡ Ingest All", type="secondary", use_container_width=True):
+                    all_accs = [f["accession"] for f in discovered]
+                    job_cmd = [
+                        sys.executable,
+                        os.path.join(os.path.dirname(__file__), "jobs", "ingest_sec_job.py"),
+                        "--ticker", st.session_state.discovered_ticker,
+                        "--accessions", *all_accs,
+                    ]
+                    proc = subprocess.Popen(job_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    desc = f"{st.session_state.discovered_ticker} (All {len(all_accs)} filings)"
+                    st.session_state.background_jobs.append({"target": desc, "pid": proc.pid, "process": proc})
+                    st.info(f"Started full ingestion for {desc} (PID: {proc.pid})")
+
+    # Background Job Monitor & Error Recovery
     if st.session_state.background_jobs:
         st.divider()
-        st.subheader("⚙️ Background Tasks")
+        st.subheader("⚙️ Background Ingestion Monitor")
         for j in st.session_state.background_jobs:
             poll_res = j["process"].poll()
             if poll_res is None:
-                st.caption(f"🔄 **{j['target']}**: Ingestion in progress (PID {j['pid']})...")
+                st.caption(f"🔄 **{j['target']}**: In progress (PID {j['pid']})...")
             elif poll_res == 0:
                 st.caption(f"✅ **{j['target']}**: Finished successfully.")
             else:
-                st.caption(f"❌ **{j['target']}**: Failed (Exit code {poll_res}).")
+                st.caption(f"❌ **{j['target']}**: Exited with code {poll_res}.")
 
     st.divider()
-    st.subheader("🏛️ Unity Catalog Context")
-    st.text(f"Catalog: {DATABRICKS_CATALOG}")
-    st.text(f"Schema:  {DATABRICKS_SCHEMA}")
-    st.text(f"Volume:  {DATABRICKS_VOLUME}")
-    st.text(f"Index:   {VS_INDEX_NAME.split('.')[-1]}")
-    st.text(f"LLM:     {SERVING_ENDPOINT}")
+    st.subheader("🏛️ Unity Catalog Info")
+    st.caption(f"**Catalog:** `{DATABRICKS_CATALOG}`")
+    st.caption(f"**Schema:** `{DATABRICKS_SCHEMA}`")
+    st.caption(f"**Volume:** `{DATABRICKS_VOLUME}`")
+    st.caption(f"**Deduplication:** Delta MERGE on `chunk_id`")
 
 # ==============================================================================
 # 2. Main Interface Header & Configuration
 # ==============================================================================
 st.title("📈 Databricks 2-Agent SEC Intelligence")
 st.markdown(
-    "Production 2-Agent investment research engine with **decoupled async ingestion**, "
+    "Databricks-native investment intelligence with **decoupled granular ingestion**, "
     "**multi-perspective retrieval**, and **Delta-backed HITL memory**."
 )
 
@@ -143,13 +216,12 @@ hitl_review_enabled = st.checkbox(
 )
 
 # ==============================================================================
-# 3. Chat History Display
+# 3. Chat History Display & Governed Delta Feedback Widget
 # ==============================================================================
 for msg_idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-        # Display persistent feedback widget for assistant messages
         if message["role"] == "assistant" and "response_id" in message:
             resp_id = message["response_id"]
             associated_ticker = message.get("ticker", target_ticker)
@@ -168,7 +240,7 @@ for msg_idx, message in enumerate(st.session_state.messages):
                     fb_text = st.text_input(
                         "Tell the agent what to correct or remember for this company:",
                         key=f"fb_text_{resp_id}_{msg_idx}",
-                        placeholder="e.g. Always report gross margin excluding stock compensation...",
+                        placeholder="e.g. Always report gross margin excluding stock-based compensation...",
                     )
                 
                 corrected_ground_truth = st.text_area(
@@ -240,12 +312,10 @@ if st.session_state.pending_plan is not None:
 # 5. User Chat Input Handling
 # ==============================================================================
 if prompt := st.chat_input("Ask an investment question (e.g. 'What drove gross margin changes in Q4?'):"):
-    # Display user query in chat
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Check if HITL plan review is enabled
     if hitl_review_enabled:
         with st.status("Supervisor Planning & Memory Retrieval...") as status_box:
             status_box.write("Checking Delta memory for past company feedback...")
@@ -259,7 +329,6 @@ if prompt := st.chat_input("Ask an investment question (e.g. 'What drove gross m
         st.session_state.pending_plan = plan
         st.rerun()
     else:
-        # Direct execution
         with st.chat_message("assistant"):
             with st.status("Executing 2-Agent Intelligence Workflow...") as status_box:
                 status_box.write("Step 1/3: Supervisor retrieving past feedback memory and designing plan...")
@@ -288,4 +357,3 @@ if prompt := st.chat_input("Ask an investment question (e.g. 'What drove gross m
                 "query": prompt,
             })
             st.rerun()
-
