@@ -1,0 +1,22 @@
+command:
+  - "streamlit"
+  - "run"
+  - "app.py"
+  - "--server.port"
+  - "8501"
+  - "--server.address"
+  - "0.0.0.0"
+env:
+  - name: "DATABRICKS_CATALOG"
+    value: "investment_prod"
+  - name: "DATABRICKS_SCHEMA"
+    value: "sec_intelligence"
+  - name: "DATABRICKS_VOLUME"
+    value: "raw_filings"
+  - name: "VECTOR_SEARCH_ENDPOINT"
+    value: "sec_vs_endpoint"
+  - name: "SERVING_ENDPOINT"
+    value: "databricks-meta-llama-3-3-70b-instruct"
+  - name: "STREAMLIT_GATHER_USAGE_STATS"
+    value: "false"
+
