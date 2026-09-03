@@ -142,12 +142,18 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
         logger.info("No chunks to write to Delta table.")
         return 0
 
-    # 1. Check for active PySpark session
+    # 1. Check for PySpark session (Native Databricks Cluster / Notebook)
     try:
         from pyspark.sql import SparkSession
         spark = SparkSession.getActiveSession()
+        if spark is None:
+            try:
+                spark = SparkSession.builder.getOrCreate()
+            except Exception:
+                spark = None
+
         if spark is not None:
-            logger.info("Writing %d chunks via active SparkSession to %s (idempotent merge)...", len(chunks), CHUNKS_TABLE)
+            logger.info("Writing %d chunks via SparkSession to %s (idempotent merge)...", len(chunks), CHUNKS_TABLE)
             new_df = spark.createDataFrame(chunks)
             new_df.createOrReplaceTempView("new_incoming_chunks")
 
@@ -157,6 +163,7 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
                 ticker STRING,
                 form_type STRING,
                 year INT,
+                quarter STRING,
                 accession STRING,
                 content STRING,
                 CONSTRAINT sec_chunks_pk PRIMARY KEY (chunk_id)
@@ -167,12 +174,13 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
             MERGE INTO {CHUNKS_TABLE} AS target
             USING new_incoming_chunks AS source
             ON target.chunk_id = source.chunk_id
+            WHEN MATCHED THEN UPDATE SET target.content = source.content, target.quarter = source.quarter
             WHEN NOT MATCHED THEN INSERT *;
             """)
             logger.info("Successfully merged %d chunks via Spark into %s.", len(chunks), CHUNKS_TABLE)
             return len(chunks)
     except Exception as e:
-        logger.debug("PySpark not available or failed (%s). Using Databricks SQL Warehouse.", e)
+        logger.info("Spark cluster session not active (%s). Using Databricks SQL Warehouse.", e)
 
     # 2. Databricks SQL Warehouse Execution
     from databricks.sdk import WorkspaceClient
