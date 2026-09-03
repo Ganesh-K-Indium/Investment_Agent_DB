@@ -248,11 +248,16 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
         WHEN NOT MATCHED THEN INSERT (chunk_id, ticker, form_type, year, quarter, accession, content)
         VALUES (source.chunk_id, source.ticker, source.form_type, source.year, source.quarter, source.accession, source.content);
         """
-        w.statement_execution.execute_statement(
+        resp = w.statement_execution.execute_statement(
             warehouse_id=warehouse_id,
             statement=merge_sql,
             wait_timeout="50s",
         )
+        if hasattr(resp, "status") and resp.status:
+            state_str = str(getattr(resp.status, "state", ""))
+            if "FAILED" in state_str:
+                err_text = getattr(resp.status.error, "message", "Unknown SQL execution failure")
+                raise RuntimeError(f"Delta table MERGE failed: {err_text}")
         total_processed += len(batch)
 
     logger.info("Successfully merged %d chunks into %s without duplicates.", total_processed, CHUNKS_TABLE)
@@ -264,7 +269,15 @@ def sync_vector_search_index() -> str:
     from databricks.vector_search.client import VectorSearchClient
 
     try:
-        vsc = VectorSearchClient()
+        host = os.getenv("DATABRICKS_HOST")
+        client_id = os.getenv("DATABRICKS_CLIENT_ID")
+        client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
+
+        if client_id and client_secret and host:
+            vsc = VectorSearchClient(workspace_url=host, client_id=client_id, client_secret=client_secret)
+        else:
+            vsc = VectorSearchClient()
+
         endpoints = vsc.list_endpoints().get("endpoints", [])
         ep_names = [ep.get("name") for ep in endpoints]
 
