@@ -85,15 +85,9 @@ class SECSupervisorAgent:
 
     def __init__(self, model_serving_endpoint: str = SERVING_ENDPOINT):
         self.endpoint_name = model_serving_endpoint
-        try:
-            self.workspace_client = WorkspaceClient()
-            host = (self.workspace_client.config.host or "https://databricks.local").rstrip("/")
-            token = self.workspace_client.config.token or "no-token"
-        except Exception as e:
-            logger.warning("Databricks WorkspaceClient auth unavailable at init: %s", e)
-            self.workspace_client = None
-            host = os.getenv("DATABRICKS_HOST", "https://databricks.local").rstrip("/")
-            token = os.getenv("DATABRICKS_TOKEN", "no-token")
+        from config import get_databricks_host_and_token, get_workspace_client
+        self.workspace_client = get_workspace_client()
+        host, token = get_databricks_host_and_token()
 
         self.llm_client = OpenAI(
             api_key=token,

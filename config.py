@@ -72,3 +72,44 @@ def get_workspace_client():
     elif token:
         return WorkspaceClient(token=token)
     return WorkspaceClient()
+
+
+def get_databricks_host_and_token():
+    """
+    Resolves the active Databricks host and valid Bearer token across:
+    1. Environment variables (DATABRICKS_HOST, DATABRICKS_TOKEN)
+    2. WorkspaceClient OAuth / M2M authentication (w.config.authenticate())
+    3. Databricks Notebook DBUtils context
+    """
+    token = os.getenv("DATABRICKS_TOKEN")
+    host = os.getenv("DATABRICKS_HOST")
+
+    w = None
+    try:
+        w = get_workspace_client()
+        if not host:
+            host = getattr(w.config, "host", None)
+        if not token:
+            auth_headers = w.config.authenticate()
+            if auth_headers and "Authorization" in auth_headers:
+                token = auth_headers["Authorization"].replace("Bearer ", "").strip()
+    except Exception:
+        pass
+
+    # Notebook context fallback if token is still empty
+    if not token:
+        try:
+            from pyspark.sql import SparkSession
+            spark = SparkSession.getActiveSession()
+            if spark:
+                from pyspark.dbutils import DBUtils
+                dbutils = DBUtils(spark)
+                token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+                if not host:
+                    host = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get()
+        except Exception:
+            pass
+
+    host = (host or "https://databricks.local").rstrip("/")
+    return host, (token or "no-token")
+
