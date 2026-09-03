@@ -53,8 +53,11 @@ flowchart TD
 5. **Delta-Backed HITL Memory**:
    - User critiques, ratings, and ground-truth corrections are saved into `{CATALOG}.{SCHEMA}.agent_feedback`.
    - Supervisor automatically retrieves past critiques for that company and dynamically injects them into future planning and synthesis prompts.
-6. **Unity Catalog & MCP-Ready Tools**:
-   - Functions in `tools/uc_tools.py` are registered into Unity Catalog via `unitycatalog.ai.core.databricks.DatabricksFunctionClient(replace=True)` for standard governance and Model Context Protocol (MCP) tool routing.
+6. **Databricks Managed MCP & Agents SDK Integration**:
+   - Built on `from agents import Agent, Runner, handoff`.
+   - Connects to Databricks managed MCP endpoints: `https://<workspace-hostname>/api/2.0/mcp/functions/{catalog}/{schema}` using `DatabricksMCPClient`.
+   - Dynamically imports registered Unity Catalog functions over MCP without manual boilerplate decorators.
+   - Delegates from Supervisor to Subagent (`SEC_Retrieval_Agent`) via native agent `handoffs`.
 7. **Full Observability**:
    - Native MLflow tracing captures spans for `supervisor_plan`, `retrieval_agent`, and `final_synthesis`.
    - Standard HTTP and OpenAI loggers are silenced to keep production logs clean.

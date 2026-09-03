@@ -1,14 +1,10 @@
 """
-Supervisor & Human-in-the-Loop (HITL) Agent (Agent 1).
-Orchestrates:
-1. Memory Retrieval: Injects past user critiques and corrections from agent_feedback Delta table.
-2. Task Planning: Plans queries and analytical focus with HITL review capability.
-3. Retrieval Handoff: Dispatches retrieval tasks to SECRetrievalAgent.
-4. Final Synthesis: Synthesizes evidence and past feedback into a Wall Street-grade brief.
-5. Observability: Encloses reasoning phases in native MLflow spans:
-   - supervisor_plan
-   - retrieval_agent
-   - final_synthesis
+Supervisor & Human-in-the-Loop (HITL) Agent (Agent 1) built with Databricks / OpenAI Agents SDK.
+Features:
+- Imports registered Unity Catalog tools over Databricks MCP endpoint.
+- Connects sub-agent (SEC_Retrieval_Agent) via handoff and tool orchestration.
+- Integrates memory retrieval from agent_feedback Delta table.
+- Wraps reasoning phases in MLflow trace spans: supervisor_plan, retrieval_agent, final_synthesis.
 """
 
 import os
@@ -18,10 +14,16 @@ from contextlib import contextmanager
 from typing import Dict, Any, Optional, List
 
 from databricks.sdk import WorkspaceClient
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
+from agents import Agent, Runner, handoff, set_default_openai_client
 
-from config import SERVING_ENDPOINT
+from config import (
+    SERVING_ENDPOINT,
+    DATABRICKS_CATALOG,
+    DATABRICKS_SCHEMA,
+)
 from tools.uc_tools import get_relevant_feedback
+from tools.mcp_tools import get_databricks_mcp_server, get_databricks_mcp_agent_tools
 from agent.retriever import SECRetrievalAgent
 
 logger = logging.getLogger("agent.supervisor")
@@ -40,6 +42,42 @@ def safe_mlflow_span(span_name: str):
     except Exception as exc:
         logger.debug("MLflow span '%s' error or unavailable: %s", span_name, exc)
         yield None
+
+
+def create_supervisor_agent(
+    retrieval_agent_instance: Agent,
+    model_serving_endpoint: str = SERVING_ENDPOINT,
+) -> Agent:
+    """
+    Constructs the Main Supervisor Agent using Databricks MCP tools and Agents SDK.
+    Directly passes the registered UC memory tools and registers the retrieval agent via handoffs.
+    """
+    instructions = (
+        "You are the Lead Financial Research Supervisor and Principal Synthesizer on Databricks.\n"
+        "Your mission is to formulate thorough investment briefs based on SEC filing disclosures and user feedback memory.\n"
+        "Workflow:\n"
+        "1. First, call `get_relevant_feedback` (imported via Databricks Unity Catalog MCP) to check past company critiques.\n"
+        "2. Formulate a structured research plan incorporating past guidelines.\n"
+        "3. Hand off or dispatch the search request to `SEC_Retrieval_Agent` to perform technical vector retrieval.\n"
+        "4. Synthesize all findings and excerpts into an executive-ready brief with explicit chunk citations."
+    )
+
+    # 1. Fetch registered MCP tools from Databricks Unity Catalog
+    mcp_tools = get_databricks_mcp_agent_tools(catalog=DATABRICKS_CATALOG, schema=DATABRICKS_SCHEMA)
+    supervisor_tools = [t for t in mcp_tools if t.name in ("get_relevant_feedback", "record_feedback")]
+
+    # 2. Connect managed Databricks MCP server if available
+    mcp_server = get_databricks_mcp_server(catalog=DATABRICKS_CATALOG, schema=DATABRICKS_SCHEMA)
+    mcp_servers = [mcp_server] if mcp_server else []
+
+    return Agent(
+        name="SEC_Supervisor_Agent",
+        instructions=instructions,
+        model=model_serving_endpoint,
+        tools=supervisor_tools,
+        handoffs=[retrieval_agent_instance],
+        mcp_servers=mcp_servers,
+    )
 
 
 class SECSupervisorAgent:
@@ -61,7 +99,21 @@ class SECSupervisorAgent:
             api_key=token,
             base_url=f"{host}/serving-endpoints",
         )
+
+        try:
+            async_client = AsyncOpenAI(api_key=token, base_url=f"{host}/serving-endpoints")
+            set_default_openai_client(async_client, use_for_tracing=False)
+        except Exception as exc:
+            logger.debug("set_default_openai_client deferred: %s", exc)
+
+        # Initialize Retrieval Agent (Agent 2)
         self.retriever = SECRetrievalAgent(model_serving_endpoint=model_serving_endpoint)
+
+        # Build Supervisor Agent (Agent 1) with MCP tools and retrieval sub-agent handoff
+        self.agent = create_supervisor_agent(
+            retrieval_agent_instance=self.retriever.agent,
+            model_serving_endpoint=model_serving_endpoint,
+        )
 
     def plan_task(
         self,
@@ -81,14 +133,9 @@ class SECSupervisorAgent:
 
             system_prompt = (
                 "You are a Lead Financial Research Director overseeing an SEC filings intelligence team. "
-                "Your job is to formulate a structured research plan to answer the user's question.\n"
+                "Formulate a structured research plan to answer the user's question.\n"
                 "Incorporate any past user guidelines, corrections, or critiques provided.\n"
-                "Output ONLY a valid JSON object with the following keys:\n"
-                "- 'target_ticker': Uppercase ticker string\n"
-                "- 'form_type': Filing form (e.g. 10-K, 10-Q)\n"
-                "- 'fiscal_year': Integer year\n"
-                "- 'planned_sub_queries': List of 2 to 3 targeted retrieval queries\n"
-                "- 'analytical_focus': Short description of the analytical angle and past feedback incorporated\n"
+                "Output ONLY a valid JSON object with keys: target_ticker, form_type, fiscal_year, planned_sub_queries, analytical_focus."
             )
 
             user_prompt = (
@@ -179,12 +226,10 @@ class SECSupervisorAgent:
         retrieval_result: Dict[str, Any],
     ) -> str:
         """
-        Step 3: Synthesizes evidence, past user preferences, and financial context into
-        a comprehensive markdown research brief with explicit citations.
+        Step 3: Synthesizes evidence and past feedback into a comprehensive research brief.
         Wrapped in MLflow span: 'final_synthesis'.
         """
         with safe_mlflow_span("final_synthesis") as span:
-            # If the retrieval agent returned an alert (e.g. filing not yet indexed), return it directly
             if not retrieval_result.get("success") and retrieval_result.get("alert"):
                 return retrieval_result["alert"]
 
@@ -251,10 +296,7 @@ class SECSupervisorAgent:
         year: int = 2023,
         approved_plan: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Executes the end-to-end multi-agent flow.
-        If an approved_plan is provided (from HITL plan review), it bypasses initial planning.
-        """
+        """Executes the end-to-end multi-agent flow."""
         plan = approved_plan or self.plan_task(
             user_query=user_query,
             ticker=ticker,
