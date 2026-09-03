@@ -14,6 +14,9 @@
 # MAGIC > 3. **2-Agent Intelligence Execution with MLflow 3.x Tracing**
 # MAGIC > 4. **Delta-Backed HITL Memory Loop** (Critique persistence & prompt adaptation)
 # MAGIC > 5. **Databricks Apps One-Click Deployment**
+# MAGIC 
+# MAGIC %pip install openai-agents>=0.2.0 databricks-vectorsearch>=0.40 databricks-mcp>=0.9.0 pyyaml>=6.0.0
+# MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 # MAGIC %md
