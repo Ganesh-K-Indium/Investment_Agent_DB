@@ -355,9 +355,9 @@ class SECLoader:
 
         # Upload directly to Unity Catalog Volume via Files API so it appears in Catalog Explorer
         try:
-            from databricks.sdk import WorkspaceClient
+            from config import get_workspace_client
             import io
-            w = WorkspaceClient()
+            w = get_workspace_client()
             vol_target = f"/Volumes/{DATABRICKS_CATALOG}/{DATABRICKS_SCHEMA}/{DATABRICKS_VOLUME}/{filename}"
             w.files.upload(vol_target, io.BytesIO(full_content.encode("utf-8")), overwrite=True)
             logger.info("Uploaded filing to Unity Catalog Volume: %s", vol_target)

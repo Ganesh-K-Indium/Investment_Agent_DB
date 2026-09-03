@@ -17,12 +17,19 @@ logger = logging.getLogger(__name__)
 
 def _get_workspace_client_and_warehouse():
     """Helper to lazily initialize WorkspaceClient and locate an active SQL Warehouse."""
-    from databricks.sdk import WorkspaceClient
-    w = WorkspaceClient()
-    warehouses = list(w.warehouses.list())
-    if not warehouses:
+    from config import get_workspace_client, DATABRICKS_WAREHOUSE_ID
+    w = get_workspace_client()
+    wh_id = DATABRICKS_WAREHOUSE_ID or os.getenv("DATABRICKS_WAREHOUSE_ID")
+    if not wh_id:
+        try:
+            warehouses = list(w.warehouses.list())
+            if warehouses:
+                wh_id = warehouses[0].id
+        except Exception:
+            pass
+    if not wh_id:
         raise RuntimeError("No active Databricks SQL Warehouse found for tool execution.")
-    return w, warehouses[0].id
+    return w, wh_id
 
 
 def check_accession_status(ticker: str, accession: str) -> str:

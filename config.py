@@ -55,3 +55,20 @@ try:
         mlflow.openai.autolog()
 except Exception as e:
     logging.getLogger(__name__).warning("MLflow autolog could not be initialized at config load: %s", e)
+
+
+def get_workspace_client():
+    """
+    Returns a WorkspaceClient instance.
+    If DATABRICKS_TOKEN is provided, prioritizes PAT authentication (acting as the user).
+    Otherwise falls back to ambient Databricks authentication (OAuth M2M service principal).
+    """
+    from databricks.sdk import WorkspaceClient
+
+    token = os.getenv("DATABRICKS_TOKEN")
+    host = os.getenv("DATABRICKS_HOST")
+    if token and host:
+        return WorkspaceClient(host=host, token=token)
+    elif token:
+        return WorkspaceClient(token=token)
+    return WorkspaceClient()

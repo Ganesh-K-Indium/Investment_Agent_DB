@@ -183,9 +183,9 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
         logger.info("Spark cluster session not active (%s). Using Databricks SQL Warehouse.", e)
 
     # 2. Databricks SQL Warehouse Execution
-    from databricks.sdk import WorkspaceClient
+    from config import get_workspace_client
 
-    w = WorkspaceClient()
+    w = get_workspace_client()
     warehouse_id = os.getenv("DATABRICKS_WAREHOUSE_ID")
     if not warehouse_id:
         try:
@@ -310,8 +310,8 @@ def sync_vector_search_index() -> str:
     """Synchronizes or provisions the Databricks Vector Search Delta Sync index."""
     # 1. Prefer native Databricks SDK (pre-installed on all Databricks runtimes, zero pip dependencies)
     try:
-        from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
+        from config import get_workspace_client
+        w = get_workspace_client()
         logger.info("Triggering vector search sync via native Databricks SDK on '%s'...", VS_INDEX_NAME)
         w.vector_search_indexes.sync_index(index_name=VS_INDEX_NAME)
         logger.info("Successfully triggered vector index sync on '%s'.", VS_INDEX_NAME)
