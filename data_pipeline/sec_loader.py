@@ -306,6 +306,22 @@ class SECLoader:
         return await self.download_and_save_filing_by_meta(filings[0], output_dir=output_dir)
 
 
+def _safe_run_coroutine(coro):
+    """Executes a coroutine safely across both CLI scripts and active Databricks notebooks."""
+    import concurrent.futures
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return asyncio.run(coro)
+
+
 def discover_filings_sync(
     ticker: str,
     form_types: Optional[Sequence[str]] = None,
@@ -315,6 +331,7 @@ def discover_filings_sync(
     end_date: Optional[str] = None,
 ) -> List[Dict]:
     """Synchronous discovery wrapper."""
+    """Synchronous discovery wrapper compatible with running notebook event loops."""
     async def _run():
         async with SECLoader() as loader:
             return await loader.discover_filings(
@@ -326,6 +343,7 @@ def discover_filings_sync(
                 end_date=end_date,
             )
     return asyncio.run(_run())
+    return _safe_run_coroutine(_run())
 
 
 def load_specific_filing_sync(filing_meta: Dict, output_dir: Optional[str] = None) -> str:
@@ -334,6 +352,7 @@ def load_specific_filing_sync(filing_meta: Dict, output_dir: Optional[str] = Non
         async with SECLoader() as loader:
             return await loader.download_and_save_filing_by_meta(filing_meta, output_dir=output_dir)
     return asyncio.run(_run())
+    return _safe_run_coroutine(_run())
 
 
 def load_sec_filing_sync(
@@ -347,3 +366,4 @@ def load_sec_filing_sync(
         async with SECLoader() as loader:
             return await loader.download_and_save_filing(ticker=ticker, form=form, year=year, output_dir=output_dir)
     return asyncio.run(_run())
+    return _safe_run_coroutine(_run())
