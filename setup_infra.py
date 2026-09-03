@@ -71,12 +71,6 @@ def initialize_governance_and_tables(w: WorkspaceClient, warehouse_id: str):
         )
         TBLPROPERTIES (delta.enableChangeDataFeed = true);
         """,
-        f"""
-        ALTER TABLE {CHUNKS_TABLE} ADD COLUMNS IF NOT EXISTS (
-            quarter STRING,
-            accession STRING
-        );
-        """,
     ]
 
     for stmt in statements:
@@ -94,6 +88,18 @@ def initialize_governance_and_tables(w: WorkspaceClient, warehouse_id: str):
             else:
                 logger.error("Failed executing statement '%s': %s", lead_line, exc)
                 raise
+
+    # Safe schema migration for pre-existing tables without quarter/accession
+    for col in ("quarter STRING", "accession STRING"):
+        try:
+            w.statement_execution.execute_statement(
+                warehouse_id=warehouse_id,
+                statement=f"ALTER TABLE {CHUNKS_TABLE} ADD COLUMNS ({col});",
+                wait_timeout="15s",
+            )
+        except Exception:
+            pass  # Column already exists
+
     logger.info("Unity Catalog objects and Delta tables initialized successfully.")
 
 
