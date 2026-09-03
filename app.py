@@ -144,33 +144,56 @@ with st.sidebar:
                 if c_box:
                     selected_accessions.append(item["accession"])
 
+            def _run_ingest_with_live_logs(accs: list, desc: str):
+                job_cmd = [
+                    sys.executable,
+                    "-u",
+                    os.path.join(os.path.dirname(__file__), "jobs", "ingest_sec_job.py"),
+                    "--ticker", st.session_state.discovered_ticker,
+                    "--accessions", *accs,
+                ]
+                with st.status(f"📥 Ingesting {desc}...", expanded=True) as status_box:
+                    status_box.write("🚀 Initializing Databricks ingestion process...")
+                    log_placeholder = st.empty()
+                    captured_lines = []
+
+                    proc = subprocess.Popen(
+                        job_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                    )
+
+                    for line in proc.stdout:
+                        captured_lines.append(line)
+                        tail = "".join(captured_lines[-12:])
+                        log_placeholder.code(tail, language="text")
+
+                    proc.wait()
+
+                    if proc.returncode == 0:
+                        status_box.update(label=f"✅ Successfully ingested {desc}!", state="complete", expanded=False)
+                        st.success(f"🎉 Ingestion finished! Chunks merged into `{DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.sec_filing_chunks` and indexed in Vector Search.")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        status_box.update(label=f"❌ Ingestion failed for {desc} (Exit code {proc.returncode})", state="error", expanded=True)
+                        st.error("Ingestion failed. See details below.")
+                        with st.expander("Full Ingestion Traceback & Logs", expanded=True):
+                            st.code("".join(captured_lines), language="text")
+
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
                 if st.button("📥 Ingest Selected", use_container_width=True, disabled=(len(selected_accessions) == 0)):
-                    job_cmd = [
-                        sys.executable,
-                        os.path.join(os.path.dirname(__file__), "jobs", "ingest_sec_job.py"),
-                        "--ticker", st.session_state.discovered_ticker,
-                        "--accessions", *selected_accessions,
-                    ]
-                    proc = subprocess.Popen(job_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                     desc = f"{st.session_state.discovered_ticker} ({len(selected_accessions)} selected filings)"
-                    st.session_state.background_jobs.append({"target": desc, "pid": proc.pid, "process": proc})
-                    st.info(f"Started ingestion for {desc} (PID: {proc.pid})")
+                    _run_ingest_with_live_logs(selected_accessions, desc)
 
             with col_btn2:
                 if st.button("⚡ Ingest All", type="secondary", use_container_width=True):
                     all_accs = [f["accession"] for f in discovered]
-                    job_cmd = [
-                        sys.executable,
-                        os.path.join(os.path.dirname(__file__), "jobs", "ingest_sec_job.py"),
-                        "--ticker", st.session_state.discovered_ticker,
-                        "--accessions", *all_accs,
-                    ]
-                    proc = subprocess.Popen(job_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                     desc = f"{st.session_state.discovered_ticker} (All {len(all_accs)} filings)"
-                    st.session_state.background_jobs.append({"target": desc, "pid": proc.pid, "process": proc})
-                    st.info(f"Started full ingestion for {desc} (PID: {proc.pid})")
+                    _run_ingest_with_live_logs(all_accs, desc)
 
     # Background Job Monitor & Error Recovery
     if st.session_state.background_jobs:
