@@ -64,10 +64,18 @@ def initialize_governance_and_tables(w: WorkspaceClient, warehouse_id: str):
             ticker STRING,
             form_type STRING,
             year INT,
+            quarter STRING,
+            accession STRING,
             content STRING,
             CONSTRAINT sec_chunks_pk PRIMARY KEY (chunk_id)
         )
         TBLPROPERTIES (delta.enableChangeDataFeed = true);
+        """,
+        f"""
+        ALTER TABLE {CHUNKS_TABLE} ADD COLUMNS IF NOT EXISTS (
+            quarter STRING,
+            accession STRING
+        );
         """,
     ]
 

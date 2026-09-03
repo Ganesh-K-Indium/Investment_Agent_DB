@@ -82,10 +82,18 @@ print(f" - VS ENDPOINT: {os.getenv('VECTOR_SEARCH_ENDPOINT')}")
 # MAGIC     ticker STRING,
 # MAGIC     form_type STRING,
 # MAGIC     year INT,
+# MAGIC     quarter STRING,
+# MAGIC     accession STRING,
 # MAGIC     content STRING,
 # MAGIC     CONSTRAINT sec_chunks_pk PRIMARY KEY (chunk_id)
 # MAGIC )
 # MAGIC TBLPROPERTIES (delta.enableChangeDataFeed = true);
+# MAGIC 
+# MAGIC -- Ensure quarter & accession columns exist on pre-existing tables
+# MAGIC ALTER TABLE sec_filing_chunks ADD COLUMNS IF NOT EXISTS (
+# MAGIC     quarter STRING,
+# MAGIC     accession STRING
+# MAGIC );
 # MAGIC 
 # MAGIC -- 5. Verify active context
 # MAGIC SELECT 

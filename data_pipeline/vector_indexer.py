@@ -72,7 +72,8 @@ def chunk_text_deterministically(
     ticker: str,
     form_type: str,
     year: int,
-    accession: str,
+    quarter: str = "N/A",
+    accession: str = "",
     chunk_size: int = CHUNK_SIZE,
     chunk_overlap: int = CHUNK_OVERLAP,
 ) -> List[Dict]:
@@ -93,6 +94,7 @@ def chunk_text_deterministically(
     chunk_idx = 0
 
     clean_accession = accession.replace("-", "").strip() or "0000000000"
+    clean_quarter = (quarter or "N/A").strip()
 
     while start < text_len:
         end = min(start + chunk_size, text_len)
@@ -104,6 +106,7 @@ def chunk_text_deterministically(
                 "ticker": ticker.upper(),
                 "form_type": form_type.upper(),
                 "year": int(year),
+                "quarter": clean_quarter,
                 "accession": clean_accession,
                 "content": content_segment,
             })
@@ -124,6 +127,7 @@ def load_and_chunk_file(file_path: str) -> Tuple[Dict[str, str], List[Dict]]:
         ticker=meta["ticker"],
         form_type=meta["form_type"],
         year=int(meta["year"]) if meta["year"].isdigit() else 0,
+        quarter=meta.get("quarter", "N/A"),
         accession=meta["accession"],
     )
     return meta, chunks
@@ -190,6 +194,7 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
         ticker STRING,
         form_type STRING,
         year INT,
+        quarter STRING,
         accession STRING,
         content STRING,
         CONSTRAINT sec_chunks_pk PRIMARY KEY (chunk_id)
@@ -201,6 +206,16 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
         statement=create_sql,
         wait_timeout="50s",
     )
+
+    # Schema evolution: ensure quarter column exists on pre-existing tables
+    try:
+        w.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=f"ALTER TABLE {CHUNKS_TABLE} ADD COLUMNS (quarter STRING);",
+            wait_timeout="20s",
+        )
+    except Exception:
+        pass  # Column already exists
 
     # Upsert in batches of 40 using MERGE INTO
     batch_size = 40
@@ -214,18 +229,19 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
             tkr = c["ticker"].replace("'", "''")
             frm = c["form_type"].replace("'", "''")
             yr = int(c["year"])
+            qtr = c.get("quarter", "N/A").replace("'", "''")
             acc = c["accession"].replace("'", "''")
             cnt = c["content"].replace("'", "''").replace("\\", "\\\\")
-            select_rows.append(f"SELECT '{cid}' AS chunk_id, '{tkr}' AS ticker, '{frm}' AS form_type, {yr} AS year, '{acc}' AS accession, '{cnt}' AS content")
+            select_rows.append(f"SELECT '{cid}' AS chunk_id, '{tkr}' AS ticker, '{frm}' AS form_type, {yr} AS year, '{qtr}' AS quarter, '{acc}' AS accession, '{cnt}' AS content")
 
         source_union = " UNION ALL ".join(select_rows)
         merge_sql = f"""
         MERGE INTO {CHUNKS_TABLE} AS target
         USING ({source_union}) AS source
         ON target.chunk_id = source.chunk_id
-        WHEN MATCHED THEN UPDATE SET target.content = source.content
-        WHEN NOT MATCHED THEN INSERT (chunk_id, ticker, form_type, year, accession, content)
-        VALUES (source.chunk_id, source.ticker, source.form_type, source.year, source.accession, source.content);
+        WHEN MATCHED THEN UPDATE SET target.content = source.content, target.quarter = source.quarter
+        WHEN NOT MATCHED THEN INSERT (chunk_id, ticker, form_type, year, quarter, accession, content)
+        VALUES (source.chunk_id, source.ticker, source.form_type, source.year, source.quarter, source.accession, source.content);
         """
         w.statement_execution.execute_statement(
             warehouse_id=warehouse_id,
