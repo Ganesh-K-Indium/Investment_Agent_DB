@@ -167,7 +167,7 @@ def record_feedback(
     ticker: str,
     rating: str,
     feedback_text: str,
-    corrected_context: str = "",
+    corrected_context: str,
 ) -> str:
     """Inserts a human-in-the-loop (HITL) feedback row into the Delta memory table.
 

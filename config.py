@@ -10,7 +10,7 @@ import logging
 # ==============================================================================
 # 1. Environment Configurations & Production Defaults
 # ==============================================================================
-DATABRICKS_CATALOG = os.getenv("DATABRICKS_CATALOG", "investment_prod")
+DATABRICKS_CATALOG = os.getenv("DATABRICKS_CATALOG", "db_ai_strike_team")
 DATABRICKS_SCHEMA = os.getenv("DATABRICKS_SCHEMA", "sec_intelligence")
 DATABRICKS_VOLUME = os.getenv("DATABRICKS_VOLUME", "raw_filings")
 VECTOR_SEARCH_ENDPOINT = os.getenv("VECTOR_SEARCH_ENDPOINT", "sec_vs_endpoint")

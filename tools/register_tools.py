@@ -20,11 +20,27 @@ logger = logging.getLogger("tools.register_tools")
 def register_all_uc_tools(catalog: str = DATABRICKS_CATALOG, schema: str = DATABRICKS_SCHEMA):
     """
     Registers the SEC Intelligence tools into Unity Catalog via DatabricksFunctionClient.
+    Includes active notebook Spark session sync and SQL Warehouse fallback for guaranteed registration.
     """
-    from unitycatalog.ai.core.databricks import DatabricksFunctionClient
+    from unitycatalog.ai.core.databricks import DatabricksFunctionClient, generate_sql_function_body
+    from databricks.sdk import WorkspaceClient
 
     logger.info("Initializing DatabricksFunctionClient for UC tool registration...")
     client = DatabricksFunctionClient()
+
+    # If running inside a Databricks Notebook with an active SparkSession, bind it directly to prevent detached Connect sessions
+    try:
+        from pyspark.sql import SparkSession
+        spark = SparkSession.getActiveSession()
+        if spark is not None:
+            logger.info("Synchronizing active notebook Spark session for %s.%s...", catalog, schema)
+            spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
+            spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
+            spark.sql(f"USE CATALOG {catalog}")
+            spark.sql(f"USE SCHEMA {schema}")
+            client.set_spark_session(spark)
+    except Exception as exc:
+        logger.debug("Active notebook Spark sync: %s", exc)
 
     tools_to_register = [
         check_filing_status,
@@ -36,20 +52,38 @@ def register_all_uc_tools(catalog: str = DATABRICKS_CATALOG, schema: str = DATAB
 
     for tool_func in tools_to_register:
         func_name = tool_func.__name__
-        logger.info("Registering function '%s' to UC %s.%s (replace=True)...", func_name, catalog, schema)
+        full_name = f"{catalog}.{schema}.{func_name}"
+        logger.info("Registering function '%s' to UC %s (replace=True)...", func_name, full_name)
         try:
-            fn_info = client.create_python_function(
+            client.create_python_function(
                 func=tool_func,
                 catalog=catalog,
                 schema=schema,
                 replace=True,
             )
-            full_name = f"{catalog}.{schema}.{func_name}"
             logger.info("Successfully registered UC function: %s", full_name)
             registered_functions.append(full_name)
         except Exception as exc:
-            logger.error("Failed to register UC function '%s': %s", func_name, exc)
-            raise
+            logger.warning(
+                "DatabricksFunctionClient direct creation encountered: %s. Attempting SQL Warehouse fallback...",
+                exc,
+            )
+            try:
+                sql_body = generate_sql_function_body(tool_func, catalog, schema, replace=True)
+                w = WorkspaceClient()
+                warehouses = list(w.warehouses.list())
+                if not warehouses:
+                    raise RuntimeError("No SQL Warehouse available for fallback function creation.")
+                w.statement_execution.execute_statement(
+                    warehouse_id=warehouses[0].id,
+                    statement=sql_body,
+                    wait_timeout="50s",
+                )
+                logger.info("Successfully registered UC function via SQL Warehouse: %s", full_name)
+                registered_functions.append(full_name)
+            except Exception as fb_exc:
+                logger.error("Failed to register UC function '%s': %s (fallback error: %s)", func_name, exc, fb_exc)
+                raise
 
     return registered_functions
 

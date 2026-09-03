@@ -8,7 +8,7 @@ command:
   - "0.0.0.0"
 env:
   - name: "DATABRICKS_CATALOG"
-    value: "investment_prod"
+    value: "db_ai_strike_team"
   - name: "DATABRICKS_SCHEMA"
     value: "sec_intelligence"
   - name: "DATABRICKS_VOLUME"

@@ -13,7 +13,9 @@ import logging
 from databricks.sdk import WorkspaceClient
 
 # Ensure root workspace is in sys.path
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+_ROOT = os.path.abspath(os.path.dirname(__file__) if "__file__" in globals() else os.getcwd())
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from config import (
     DATABRICKS_CATALOG,
@@ -70,12 +72,20 @@ def initialize_governance_and_tables(w: WorkspaceClient, warehouse_id: str):
     ]
 
     for stmt in statements:
-        logger.info("Executing: %s", stmt.strip().splitlines()[0])
-        w.statement_execution.execute_statement(
-            warehouse_id=warehouse_id,
-            statement=stmt,
-            wait_timeout="50s",
-        )
+        lead_line = stmt.strip().splitlines()[0]
+        logger.info("Executing: %s", lead_line)
+        try:
+            w.statement_execution.execute_statement(
+                warehouse_id=warehouse_id,
+                statement=stmt,
+                wait_timeout="50s",
+            )
+        except Exception as exc:
+            if "CREATE CATALOG" in lead_line:
+                logger.info("Catalog '%s' already exists or managed externally (%s). Continuing...", DATABRICKS_CATALOG, exc)
+            else:
+                logger.error("Failed executing statement '%s': %s", lead_line, exc)
+                raise
     logger.info("Unity Catalog objects and Delta tables initialized successfully.")
 
 
