@@ -13,6 +13,7 @@ import logging
 DATABRICKS_CATALOG = os.getenv("DATABRICKS_CATALOG", "db_ai_strike_team")
 DATABRICKS_SCHEMA = os.getenv("DATABRICKS_SCHEMA", "sec_intelligence")
 DATABRICKS_VOLUME = os.getenv("DATABRICKS_VOLUME", "raw_filings")
+DATABRICKS_WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID", "58fc0be4c55c7e10")
 VECTOR_SEARCH_ENDPOINT = os.getenv("VECTOR_SEARCH_ENDPOINT", "sec_vs_endpoint")
 SERVING_ENDPOINT = os.getenv("SERVING_ENDPOINT", "databricks-meta-llama-3-3-70b-instruct")
 EMBEDDING_MODEL_ENDPOINT = os.getenv("EMBEDDING_MODEL_ENDPOINT", "databricks-bge-large-en")

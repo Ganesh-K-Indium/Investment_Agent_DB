@@ -177,15 +177,20 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
     # 2. Databricks SQL Warehouse Execution
     from databricks.sdk import WorkspaceClient
 
-    try:
-        w = WorkspaceClient()
-        warehouses = list(w.warehouses.list())
-        if not warehouses:
-            raise RuntimeError("No Databricks SQL Warehouse found in workspace.")
-        warehouse_id = warehouses[0].id
-    except Exception as exc:
-        logger.warning("Databricks workspace/warehouse unavailable (%s). Simulation mode.", exc)
-        return len(chunks)
+    w = WorkspaceClient()
+    warehouse_id = os.getenv("DATABRICKS_WAREHOUSE_ID")
+    if not warehouse_id:
+        try:
+            warehouses = list(w.warehouses.list())
+            if warehouses:
+                warehouse_id = warehouses[0].id
+        except Exception as exc:
+            logger.warning("Could not list warehouses (%s)", exc)
+
+    if not warehouse_id:
+        raise RuntimeError("No Databricks SQL Warehouse available. Please configure DATABRICKS_WAREHOUSE_ID in app.yaml.")
+
+    logger.info("Using SQL Warehouse ID: %s for Delta table ingestion", warehouse_id)
 
     # Ensure table exists with CDF enabled
     create_sql = f"""

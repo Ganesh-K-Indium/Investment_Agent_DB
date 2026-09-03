@@ -9,6 +9,8 @@ env:
     value: "sec_intelligence"
   - name: "DATABRICKS_VOLUME"
     value: "raw_filings"
+  - name: "DATABRICKS_WAREHOUSE_ID"
+    value: "58fc0be4c55c7e10"
   - name: "VECTOR_SEARCH_ENDPOINT"
     value: "sec_vs_endpoint"
   - name: "SERVING_ENDPOINT"

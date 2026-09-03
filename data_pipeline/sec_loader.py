@@ -362,7 +362,7 @@ class SECLoader:
             w.files.upload(vol_target, io.BytesIO(full_content.encode("utf-8")), overwrite=True)
             logger.info("Uploaded filing to Unity Catalog Volume: %s", vol_target)
         except Exception as exc:
-            logger.debug("UC Volume Files API upload deferred/skipped: %s", exc)
+            logger.warning("UC Volume Files API upload notice (%s): %s", vol_target, exc)
 
         logger.info("Saved clean filing text to %s (%d chars)", target_path, len(full_content))
         return target_path

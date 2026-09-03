@@ -15,6 +15,7 @@ Features:
 import os
 import sys
 import json
+import time
 import subprocess
 from datetime import date, datetime
 import streamlit as st
@@ -26,6 +27,7 @@ from config import (
     DATABRICKS_CATALOG,
     DATABRICKS_SCHEMA,
     DATABRICKS_VOLUME,
+    CHUNKS_TABLE,
     SERVING_ENDPOINT,
     VS_INDEX_NAME,
 )
@@ -144,56 +146,27 @@ with st.sidebar:
                 if c_box:
                     selected_accessions.append(item["accession"])
 
-            def _run_ingest_with_live_logs(accs: list, desc: str):
-                job_cmd = [
-                    sys.executable,
-                    "-u",
-                    os.path.join(os.path.dirname(__file__), "jobs", "ingest_sec_job.py"),
-                    "--ticker", st.session_state.discovered_ticker,
-                    "--accessions", *accs,
-                ]
-                with st.status(f"📥 Ingesting {desc}...", expanded=True) as status_box:
-                    status_box.write("🚀 Initializing Databricks ingestion process...")
-                    log_placeholder = st.empty()
-                    captured_lines = []
-
-                    proc = subprocess.Popen(
-                        job_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        bufsize=1,
-                    )
-
-                    for line in proc.stdout:
-                        captured_lines.append(line)
-                        tail = "".join(captured_lines[-12:])
-                        log_placeholder.code(tail, language="text")
-
-                    proc.wait()
-
-                    if proc.returncode == 0:
-                        status_box.update(label=f"✅ Successfully ingested {desc}!", state="complete", expanded=False)
-                        st.success(f"🎉 Ingestion finished! Chunks merged into `{DATABRICKS_CATALOG}.{DATABRICKS_SCHEMA}.sec_filing_chunks` and indexed in Vector Search.")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        status_box.update(label=f"❌ Ingestion failed for {desc} (Exit code {proc.returncode})", state="error", expanded=True)
-                        st.error("Ingestion failed. See details below.")
-                        with st.expander("Full Ingestion Traceback & Logs", expanded=True):
-                            st.code("".join(captured_lines), language="text")
-
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
                 if st.button("📥 Ingest Selected", use_container_width=True, disabled=(len(selected_accessions) == 0)):
                     desc = f"{st.session_state.discovered_ticker} ({len(selected_accessions)} selected filings)"
-                    _run_ingest_with_live_logs(selected_accessions, desc)
+                    st.session_state.trigger_ingest = {
+                        "ticker": st.session_state.discovered_ticker,
+                        "accessions": selected_accessions,
+                        "desc": desc,
+                    }
+                    st.rerun()
 
             with col_btn2:
                 if st.button("⚡ Ingest All", type="secondary", use_container_width=True):
                     all_accs = [f["accession"] for f in discovered]
                     desc = f"{st.session_state.discovered_ticker} (All {len(all_accs)} filings)"
-                    _run_ingest_with_live_logs(all_accs, desc)
+                    st.session_state.trigger_ingest = {
+                        "ticker": st.session_state.discovered_ticker,
+                        "accessions": all_accs,
+                        "desc": desc,
+                    }
+                    st.rerun()
 
     # Background Job Monitor & Error Recovery
     if st.session_state.background_jobs:
@@ -239,8 +212,71 @@ hitl_review_enabled = st.checkbox(
 )
 
 # ==============================================================================
-# 3. Chat History Display & Governed Delta Feedback Widget
+# Live Ingestion & Verification Center (Full-Width Main Panel)
 # ==============================================================================
+if "trigger_ingest" in st.session_state and st.session_state.trigger_ingest:
+    ingest_info = st.session_state.trigger_ingest
+    st.divider()
+    st.markdown(f"### 📥 Ingestion Console: **{ingest_info['desc']}**")
+
+    with st.status(f"⚡ Processing ingestion for {ingest_info['desc']}...", expanded=True) as status_box:
+        st.write("🚀 Starting Databricks ingestion pipeline...")
+        log_box = st.empty()
+        captured_lines = []
+
+        job_cmd = [
+            sys.executable,
+            "-u",
+            os.path.join(os.path.dirname(__file__), "jobs", "ingest_sec_job.py"),
+            "--ticker", ingest_info["ticker"],
+            "--accessions", *ingest_info["accessions"],
+        ]
+
+        proc = subprocess.Popen(
+            job_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        for line in proc.stdout:
+            captured_lines.append(line)
+            tail = "".join(captured_lines[-15:])
+            log_box.code(tail, language="text")
+
+        proc.wait()
+
+        if proc.returncode == 0:
+            status_box.update(label=f"✅ Ingestion Succeeded for {ingest_info['desc']}!", state="complete", expanded=False)
+            st.success(f"🎉 **Ingestion Succeeded!** Filings saved to Unity Catalog Volume `{DATABRICKS_VOLUME}` and indexed into Delta table `{CHUNKS_TABLE}`.")
+
+            # Post-Ingestion Live Verification Check
+            try:
+                verified_map = check_multiple_accessions_status(ingest_info["ticker"], ingest_info["accessions"])
+                total_verified = sum(verified_map.values())
+                st.info(f"📊 **Delta Verification Confirmed**: `{total_verified}` total chunks confirmed in `{CHUNKS_TABLE}`.")
+
+                # Update discovered filings cache with new indexed status
+                for f in st.session_state.discovered_filings:
+                    if f["accession"] in verified_map:
+                        f["chunks"] = verified_map[f["accession"]]
+                        f["indexed"] = f["chunks"] > 0
+            except Exception as v_err:
+                st.warning(f"Verification notice: {v_err}")
+        else:
+            status_box.update(label=f"❌ Ingestion Failed for {ingest_info['desc']} (Exit code {proc.returncode})", state="error", expanded=True)
+            st.error("Ingestion job encountered an error. Full output below:")
+            log_box.code("".join(captured_lines), language="text")
+
+    with st.expander("📜 Full Ingestion Console Log", expanded=(proc.returncode != 0)):
+        st.code("".join(captured_lines), language="text")
+
+    if st.button("✕ Close Ingestion Console", use_container_width=True):
+        del st.session_state["trigger_ingest"]
+        st.rerun()
+
+    st.divider()
 for msg_idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
