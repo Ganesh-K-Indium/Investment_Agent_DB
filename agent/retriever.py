@@ -192,10 +192,10 @@ class SECRetrievalAgent:
         k: int = 4,
     ) -> List[Dict[str, Any]]:
         """Queries Vector Search index and deduplicates chunks by chunk_id."""
-        from databricks.vector_search.client import VectorSearchClient
+        from data_pipeline.vector_indexer import get_vector_search_client
 
         try:
-            vsc = VectorSearchClient()
+            vsc = get_vector_search_client()
             index = vsc.get_index(endpoint_name=VECTOR_SEARCH_ENDPOINT, index_name=VS_INDEX_NAME)
         except Exception as exc:
             logger.error("Vector search index unavailable: %s", exc)
@@ -245,24 +245,28 @@ class SECRetrievalAgent:
     ) -> Dict[str, Any]:
         """Executes full pre-check, multi-query retrieval, deduplication, and citation building."""
         status_info = self.verify_filing_availability(ticker=ticker, form_type=form_type, year=year)
-        if status_info.get("status") != "INDEXED" or status_info.get("chunk_count", 0) == 0:
+        sub_queries = self.decompose_query(user_query=user_query, ticker=ticker, form_type=form_type, year=year)
+        chunks = self.execute_vector_search(sub_queries=sub_queries, ticker=ticker, form_type=form_type, year=year)
+
+        if not chunks:
+            err_detail = status_info.get("detail", "")
+            detail_msg = f"\n\n*Diagnostics*: `{err_detail}`" if err_detail else ""
             alert_msg = (
-                f"⚠️ **ALERT: SEC Filing Not Indexed**\n\n"
-                f"The target filing for **{ticker.upper()} ({form_type} {year})** has not been ingested yet "
-                f"in `{VS_INDEX_NAME}` (found 0 chunks).\n\n"
-                f"**Action Required**: Please run the background ingestion job via the sidebar or CLI "
-                f"(`jobs/ingest_sec_job.py --ticker {ticker.upper()} --form {form_type} --year {year}`) "
-                f"before running this query."
+                f"⚠️ **ALERT: SEC Filing Not Indexed or Still Syncing**\n\n"
+                f"The target filing for **{ticker.upper()} ({form_type} {year})** returned 0 vector matches "
+                f"in `{VS_INDEX_NAME}`.{detail_msg}\n\n"
+                f"**Possible Causes**:\n"
+                f"1. **Vector Index Still Provisioning**: If you just ingested this filing, Databricks Vector Search takes 3-5 minutes to build embeddings (Initial Sync).\n"
+                f"2. **App Permissions**: If you haven't added `DATABRICKS_TOKEN` to your Databricks App settings, the app cannot access the catalog.\n"
+                f"3. **Different Year/Form Filter**: Check that the Active Query filter matches the ingested filing."
             )
             return {
                 "success": False,
                 "status": "NOT_FOUND",
                 "alert": alert_msg,
-                "sub_queries": [],
+                "sub_queries": sub_queries,
                 "evidence_chunks": [],
             }
-
-        sub_queries = self.decompose_query(user_query=user_query, ticker=ticker, form_type=form_type, year=year)
         chunks = self.execute_vector_search(sub_queries=sub_queries, ticker=ticker, form_type=form_type, year=year)
 
         formatted_evidence = []
