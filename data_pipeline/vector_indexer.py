@@ -308,6 +308,18 @@ def get_vector_search_client():
 
 def sync_vector_search_index() -> str:
     """Synchronizes or provisions the Databricks Vector Search Delta Sync index."""
+    # 1. Prefer native Databricks SDK (pre-installed on all Databricks runtimes, zero pip dependencies)
+    try:
+        from databricks.sdk import WorkspaceClient
+        w = WorkspaceClient()
+        logger.info("Triggering vector search sync via native Databricks SDK on '%s'...", VS_INDEX_NAME)
+        w.vector_search_indexes.sync_index(index_name=VS_INDEX_NAME)
+        logger.info("Successfully triggered vector index sync on '%s'.", VS_INDEX_NAME)
+        return VS_INDEX_NAME
+    except Exception as sdk_exc:
+        logger.info("SDK vector sync deferred (%s). Trying VectorSearchClient...", sdk_exc)
+
+    # 2. Fallback to databricks.vector_search client if installed
     try:
         vsc = get_vector_search_client()
 
