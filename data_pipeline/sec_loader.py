@@ -202,6 +202,7 @@ class SECLoader:
         quarter: Optional[str] = None,
         start_date: Optional[Union[date, str]] = None,
         end_date: Optional[Union[date, str]] = None,
+        year_type: str = "fiscal",
     ) -> List[Dict]:
         """
         Discovers all available filings for a ticker based on user criteria without downloading full text.
@@ -209,10 +210,11 @@ class SECLoader:
         Args:
             ticker: Stock ticker symbol (e.g. AAPL, NVDA).
             form_types: Subset of ('10-K', '10-Q', '8-K').
-            year: Optional fiscal/filing year filter.
-            quarter: Optional quarter filter ('Q1', 'Q2', 'Q3', 'Q4').
+            year: Target year to filter by.
+            quarter: Target quarter ('Q1', 'Q2', 'Q3'). 10-Ks are excluded if Q1/Q2/Q3 is specified.
             start_date: Optional lower date bound (inclusive).
             end_date: Optional upper date bound (inclusive).
+            year_type: 'fiscal' (default, matches company's fiscal year) or 'calendar' (matches filing submission year).
         """
         allowed_forms = set(f.upper() for f in (form_types or VALID_FORM_TYPES))
         start_dt = datetime.strptime(start_date, "%Y-%m-%d").date() if isinstance(start_date, str) else start_date
@@ -246,22 +248,31 @@ class SECLoader:
 
                 # Compute official corporate fiscal period and fiscal year
                 fiscal_period, fiscal_year = compute_fiscal_period_and_year(report_dt, form, fye_mmdd)
-                calendar_quarter = compute_quarter(report_dt)
+                calendar_quarter = compute_quarter(report_dt) if form == "10-Q" else "N/A"
 
-                # Flexible year matching: matches fiscal year, report year, or filing year
-                if year and (fiscal_year != year and report_dt.year != year and filing_dt.year != year):
-                    continue
+                # Strict year matching (default is fiscal year; calendar if specified)
+                if year:
+                    target_y = int(year)
+                    if year_type == "fiscal":
+                        if fiscal_year != target_y:
+                            continue
+                    else:
+                        if filing_dt.year != target_y:
+                            continue
 
-                # Flexible quarter matching: matches corporate fiscal quarter or calendar quarter
+                # Quarter filtering:
+                # 10-K is an Annual report covering the entire year; exclude if user asked for Q1/Q2/Q3
                 if quarter:
                     q_clean = quarter.upper()
-                    matched_q = (
-                        q_clean == fiscal_period.upper()
-                        or q_clean == calendar_quarter.upper()
-                        or (form == "10-K" and q_clean in ("Q4", "FY"))
-                    )
-                    if not matched_q:
-                        continue
+                    if form == "10-K":
+                        if q_clean not in ("FY", "ANNUAL", "ALL"):
+                            continue
+                    elif form == "10-Q":
+                        if fiscal_period.upper() != q_clean:
+                            continue
+                    elif form == "8-K":
+                        if q_clean not in ("CURRENT", "ALL"):
+                            continue
 
                 accession_raw = filings_meta["accessionNumber"][i]
                 accession = accession_raw.replace("-", "")
@@ -298,7 +309,7 @@ class SECLoader:
                 continue
             if end_dt and p_from_dt > end_dt:
                 continue
-            if year and (year < p_from_dt.year and year > p_to_dt.year):
+            if year and (int(year) > p_to_dt.year + 1 or int(year) < p_from_dt.year - 1):
                 continue
 
             p_url = f"https://data.sec.gov/submissions/{file_info['name']}"
@@ -391,8 +402,8 @@ def discover_filings_sync(
     quarter: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    year_type: str = "fiscal",
 ) -> List[Dict]:
-    """Synchronous discovery wrapper."""
     """Synchronous discovery wrapper compatible with running notebook event loops."""
     async def _run():
         async with SECLoader() as loader:
@@ -403,8 +414,8 @@ def discover_filings_sync(
                 quarter=quarter,
                 start_date=start_date,
                 end_date=end_date,
+                year_type=year_type,
             )
-    return asyncio.run(_run())
     return _safe_run_coroutine(_run())
 
 
@@ -413,7 +424,6 @@ def load_specific_filing_sync(filing_meta: Dict, output_dir: Optional[str] = Non
     async def _run():
         async with SECLoader() as loader:
             return await loader.download_and_save_filing_by_meta(filing_meta, output_dir=output_dir)
-    return asyncio.run(_run())
     return _safe_run_coroutine(_run())
 
 
@@ -427,5 +437,4 @@ def load_sec_filing_sync(
     async def _run():
         async with SECLoader() as loader:
             return await loader.download_and_save_filing(ticker=ticker, form=form, year=year, output_dir=output_dir)
-    return asyncio.run(_run())
     return _safe_run_coroutine(_run())
