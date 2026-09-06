@@ -292,18 +292,19 @@ def get_vector_search_client():
     )
 
     if token and host:
-        return VectorSearchClient(workspace_url=host, personal_access_token=token)
+        return VectorSearchClient(workspace_url=host, personal_access_token=token, disable_notice=True)
     elif client_id and client_secret and host:
         kwargs = {
             "workspace_url": host,
             "service_principal_client_id": client_id,
             "service_principal_client_secret": client_secret,
+            "disable_notice": True,
         }
         if tenant_id:
             kwargs["azure_tenant_id"] = tenant_id
         return VectorSearchClient(**kwargs)
     else:
-        return VectorSearchClient()
+        return VectorSearchClient(disable_notice=True)
 
 
 def sync_vector_search_index() -> str:
