@@ -17,9 +17,4 @@ env:
     value: "databricks-meta-llama-3-3-70b-instruct"
   - name: "STREAMLIT_GATHER_USAGE_STATS"
     value: "false"
-  - name: "DATABRICKS_TOKEN"
-    valueFrom:
-      secret:
-        scope: "sec_scope"
-        key: "databricks_token"
 
