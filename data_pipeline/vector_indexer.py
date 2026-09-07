@@ -274,37 +274,37 @@ def write_chunks_to_delta_table(chunks: List[Dict]) -> int:
 
 def get_vector_search_client():
     """
-    Initializes VectorSearchClient using the official Databricks authentication precedence:
-    1. Personal Access Token (PAT) if DATABRICKS_TOKEN provided.
-    2. Azure / AWS Service Principal credentials (DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET, DATABRICKS_HOST).
-    3. Auto-detection (Databricks notebook context).
+    Initializes VectorSearchClient using unified Databricks authentication:
+    1. If DATABRICKS_TOKEN is set, uses it directly (PAT flow).
+    2. Otherwise, delegates to WorkspaceClient which handles OAuth M2M
+       (auto-injected DATABRICKS_CLIENT_ID/SECRET in Databricks Apps),
+       extracts the Bearer token, and passes it to VectorSearchClient.
+    3. Falls back to auto-detection (Databricks notebook context).
     """
     from databricks.vector_search.client import VectorSearchClient
 
     host = os.getenv("DATABRICKS_HOST")
     token = os.getenv("DATABRICKS_TOKEN")
-    client_id = os.getenv("DATABRICKS_CLIENT_ID")
-    client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
-    tenant_id = (
-        os.getenv("DATABRICKS_AZURE_TENANT_ID")
-        or os.getenv("AZURE_TENANT_ID")
-        or os.getenv("ARM_TENANT_ID")
-    )
 
+    # Direct PAT auth
     if token and host:
         return VectorSearchClient(workspace_url=host, personal_access_token=token, disable_notice=True)
-    elif client_id and client_secret and host:
-        kwargs = {
-            "workspace_url": host,
-            "service_principal_client_id": client_id,
-            "service_principal_client_secret": client_secret,
-            "disable_notice": True,
-        }
-        if tenant_id:
-            kwargs["azure_tenant_id"] = tenant_id
-        return VectorSearchClient(**kwargs)
-    else:
-        return VectorSearchClient(disable_notice=True)
+
+    # OAuth M2M: let WorkspaceClient handle the token exchange, then pass the
+    # resulting Bearer token to VectorSearchClient (works on Azure and AWS).
+    try:
+        from config import get_workspace_client
+        w = get_workspace_client()
+        ws_host = (host or getattr(w.config, "host", None) or "").rstrip("/")
+        auth_headers = w.config.authenticate()
+        bearer = auth_headers.get("Authorization", "").replace("Bearer ", "").strip()
+        if bearer and ws_host:
+            return VectorSearchClient(workspace_url=ws_host, personal_access_token=bearer, disable_notice=True)
+    except Exception as e:
+        logger.debug("WorkspaceClient token extraction deferred: %s", e)
+
+    # Fallback: auto-detection (notebook context)
+    return VectorSearchClient(disable_notice=True)
 
 
 def sync_vector_search_index() -> str:
