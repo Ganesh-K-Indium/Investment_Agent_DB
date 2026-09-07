@@ -111,5 +111,7 @@ def get_databricks_host_and_token():
             pass
 
     host = (host or "https://databricks.local").rstrip("/")
+    if host and not host.startswith("http://") and not host.startswith("https://"):
+        host = f"https://{host}"
     return host, (token or "no-token")
 

@@ -88,6 +88,8 @@ class SECSupervisorAgent:
         from config import get_databricks_host_and_token, get_workspace_client
         self.workspace_client = get_workspace_client()
         host, token = get_databricks_host_and_token()
+        if host and not host.startswith("http://") and not host.startswith("https://"):
+            host = f"https://{host}"
 
         self.llm_client = OpenAI(
             api_key=token,
