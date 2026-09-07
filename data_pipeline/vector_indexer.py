@@ -282,19 +282,24 @@ def get_vector_search_client():
     3. Falls back to auto-detection (Databricks notebook context).
     """
     from databricks.vector_search.client import VectorSearchClient
-    from config import get_databricks_host_and_token
 
-    host, token = get_databricks_host_and_token()
+    def _ensure_scheme(url):
+        if url and not url.startswith("http"):
+            return f"https://{url}"
+        return url
 
-    # Direct PAT or resolved secret token
-    if token and token != "no-token" and host and not host.startswith("https://databricks.local"):
-        return VectorSearchClient(workspace_url=host, personal_access_token=token, disable_notice=True)
+    # 1. Try PAT auth if DATABRICKS_TOKEN is set
+    token = os.getenv("DATABRICKS_TOKEN")
+    host = os.getenv("DATABRICKS_HOST")
+    if token and host:
+        return VectorSearchClient(workspace_url=_ensure_scheme(host), personal_access_token=token, disable_notice=True)
 
-    # OAuth M2M: let WorkspaceClient handle the token exchange
+    # 2. OAuth M2M: let WorkspaceClient handle the token exchange,
+    #    then pass the resulting Bearer token to VectorSearchClient.
     try:
         from config import get_workspace_client
         w = get_workspace_client()
-        ws_host = (host or getattr(w.config, "host", None) or "").rstrip("/")
+        ws_host = _ensure_scheme((host or getattr(w.config, "host", None) or "").rstrip("/"))
         auth_headers = w.config.authenticate()
         bearer = auth_headers.get("Authorization", "").replace("Bearer ", "").strip()
         if bearer and ws_host:
@@ -302,7 +307,7 @@ def get_vector_search_client():
     except Exception as e:
         logger.debug("WorkspaceClient token extraction deferred: %s", e)
 
-    # Fallback: auto-detection (notebook context)
+    # 3. Fallback: auto-detection (notebook context)
     return VectorSearchClient(disable_notice=True)
 
 
