@@ -84,25 +84,6 @@ def get_databricks_host_and_token():
     token = os.getenv("DATABRICKS_TOKEN")
     host = os.getenv("DATABRICKS_HOST")
 
-    # Check Databricks Apps mounted secret files: /databricks/secrets/<scope>/<key>
-    if not token and os.path.exists("/databricks/secrets"):
-        try:
-            for root, dirs, files in os.walk("/databricks/secrets"):
-                for fname in files:
-                    fpath = os.path.join(root, fname)
-                    try:
-                        with open(fpath, "r") as sf:
-                            val = sf.read().strip()
-                            if val:
-                                token = val
-                                break
-                    except Exception:
-                        pass
-                if token:
-                    break
-        except Exception:
-            pass
-
     w = None
     try:
         w = get_workspace_client()
@@ -130,7 +111,5 @@ def get_databricks_host_and_token():
             pass
 
     host = (host or "https://databricks.local").rstrip("/")
-    if token and token != "no-token":
-        os.environ["DATABRICKS_TOKEN"] = token
     return host, (token or "no-token")
 
