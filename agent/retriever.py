@@ -188,11 +188,13 @@ class SECRetrievalAgent:
         """Queries Vector Search index and deduplicates chunks by chunk_id."""
         from data_pipeline.vector_indexer import get_vector_search_client
 
+        self.last_search_error = None
         try:
             vsc = get_vector_search_client()
             index = vsc.get_index(endpoint_name=VECTOR_SEARCH_ENDPOINT, index_name=VS_INDEX_NAME)
         except Exception as exc:
-            logger.error("Vector search index unavailable: %s", exc)
+            self.last_search_error = f"Vector search get_index('{VS_INDEX_NAME}') failed: {exc}"
+            logger.error(self.last_search_error)
             return []
 
         filters = {"ticker": ticker.upper()}
@@ -226,7 +228,8 @@ class SECRetrievalAgent:
                             "matched_query": query_text,
                         }
             except Exception as e:
-                logger.warning("Vector search query '%s' failed: %s", query_text, e)
+                self.last_search_error = f"Similarity search failed for '{query_text}': {e}"
+                logger.warning(self.last_search_error)
 
         return list(dedup_chunks.values())
 
@@ -244,15 +247,23 @@ class SECRetrievalAgent:
 
         if not chunks:
             err_detail = status_info.get("detail", "")
-            detail_msg = f"\n\n*Diagnostics*: `{err_detail}`" if err_detail else ""
+            vs_err = getattr(self, "last_search_error", None)
+
+            diagnostic_lines = []
+            if vs_err:
+                diagnostic_lines.append(f"**Vector Search Engine Error**: `{vs_err}`")
+            if err_detail:
+                diagnostic_lines.append(f"**SQL Delta Check**: `{err_detail}`")
+
+            diag_text = "\n\n".join(diagnostic_lines) if diagnostic_lines else "Vector Search index returned 0 matching vectors for these filters."
+
             alert_msg = (
-                f"⚠️ **ALERT: SEC Filing Not Indexed or Still Syncing**\n\n"
-                f"The target filing for **{ticker.upper()} ({form_type} {year})** returned 0 vector matches "
-                f"in `{VS_INDEX_NAME}`.{detail_msg}\n\n"
-                f"**Possible Causes**:\n"
-                f"1. **Vector Index Still Provisioning**: If you just ingested this filing, Databricks Vector Search takes 3-5 minutes to build embeddings (Initial Sync).\n"
-                f"2. **App Permissions**: If you haven't added `DATABRICKS_TOKEN` to your Databricks App settings, the app cannot access the catalog.\n"
-                f"3. **Different Year/Form Filter**: Check that the Active Query filter matches the ingested filing."
+                f"⚠️ **ALERT: SEC Filing Retrieval Inconclusive**\n\n"
+                f"The target filing for **{ticker.upper()} ({form_type} {year})** returned 0 vector matches in `{VS_INDEX_NAME}`.\n\n"
+                f"#### 🔍 Live Diagnostics:\n{diag_text}\n\n"
+                f"**Actions**:\n"
+                f"1. Check the **🩺 System Diagnostics** tab to test your token and vector endpoint.\n"
+                f"2. Check the **📥 SEC Ingestion Plane** tab to confirm chunks exist in `{CHUNKS_TABLE}`."
             )
             return {
                 "success": False,
@@ -261,7 +272,6 @@ class SECRetrievalAgent:
                 "sub_queries": sub_queries,
                 "evidence_chunks": [],
             }
-        chunks = self.execute_vector_search(sub_queries=sub_queries, ticker=ticker, form_type=form_type, year=year)
 
         formatted_evidence = []
         for idx, chunk in enumerate(chunks, 1):

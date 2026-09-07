@@ -282,16 +282,15 @@ def get_vector_search_client():
     3. Falls back to auto-detection (Databricks notebook context).
     """
     from databricks.vector_search.client import VectorSearchClient
+    from config import get_databricks_host_and_token
 
-    host = os.getenv("DATABRICKS_HOST")
-    token = os.getenv("DATABRICKS_TOKEN")
+    host, token = get_databricks_host_and_token()
 
-    # Direct PAT auth
-    if token and host:
+    # Direct PAT or resolved secret token
+    if token and token != "no-token" and host and not host.startswith("https://databricks.local"):
         return VectorSearchClient(workspace_url=host, personal_access_token=token, disable_notice=True)
 
-    # OAuth M2M: let WorkspaceClient handle the token exchange, then pass the
-    # resulting Bearer token to VectorSearchClient (works on Azure and AWS).
+    # OAuth M2M: let WorkspaceClient handle the token exchange
     try:
         from config import get_workspace_client
         w = get_workspace_client()
