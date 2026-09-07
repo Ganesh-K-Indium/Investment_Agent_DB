@@ -309,8 +309,9 @@ with tab_ingest:
                     quarter=filter_quarter,
                     start_date=start_str,
                     end_date=end_str,
-                    limit=20,
                 )
+                if discovered and len(discovered) > 20:
+                    discovered = discovered[:20]
 
                 if discovered:
                     accessions = [f["accession"] for f in discovered]

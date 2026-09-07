@@ -414,11 +414,12 @@ def discover_filings_sync(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     year_type: str = "fiscal",
+    limit: Optional[int] = None,
 ) -> List[Dict]:
     """Synchronous discovery wrapper compatible with running notebook event loops."""
     async def _run():
         async with SECLoader() as loader:
-            return await loader.discover_filings(
+            res = await loader.discover_filings(
                 ticker=ticker,
                 form_types=form_types,
                 year=year,
@@ -427,6 +428,9 @@ def discover_filings_sync(
                 end_date=end_date,
                 year_type=year_type,
             )
+            if limit and isinstance(res, list):
+                return res[:limit]
+            return res
     return _safe_run_coroutine(_run())
 
 
