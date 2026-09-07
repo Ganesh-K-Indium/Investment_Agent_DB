@@ -39,12 +39,23 @@ def get_databricks_mcp_server(
     """
     Constructs an MCPServerStreamableHttp instance targeting the Databricks UC functions MCP URL.
     Can be passed directly to Agent(..., mcp_servers=[mcp_server]).
+    Supports PAT, OAuth M2M (Databricks Apps), and notebook context auth.
     """
     try:
         w = WorkspaceClient()
         host = (w.config.host or "").rstrip("/")
+        if not host:
+            return None
+
+        # Get bearer token: try PAT first, then OAuth M2M via authenticate()
         token = w.config.token or ""
-        if not host or not token:
+        if not token:
+            try:
+                auth_headers = w.config.authenticate()
+                token = auth_headers.get("Authorization", "").replace("Bearer ", "").strip()
+            except Exception:
+                pass
+        if not token:
             return None
 
         mcp_url = f"{host}/api/2.0/mcp/functions/{catalog}/{schema}"
